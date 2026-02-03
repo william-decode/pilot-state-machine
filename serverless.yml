@@ -1,0 +1,93 @@
+service: pilot-state-machine
+
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  runtime: nodejs24.x
+  region: us-east-1
+  profile: decode
+  stage: ${opt:stage, 'dev'}
+  environment:
+    STAGE: ${self:provider.stage}
+    DB_HOST: ${file(config/config.js):DB_HOST}
+    DB_PORT: ${file(config/config.js):DB_PORT}
+    DB_NAME: ${file(config/config.js):DB_NAME}
+    DB_USER: ${file(config/config.js):DB_USER}
+    DB_PASSWORD: ${file(config/config.js):DB_PASSWORD}
+  vpc:
+    securityGroupIds:
+      - ${file(config/config.js):VPC_SECURITY_GROUP_ID}
+    subnetIds:
+      - ${file(config/config.js):VPC_SUBNET_ID_1}
+      - ${file(config/config.js):VPC_SUBNET_ID_2}
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+          Resource: 'arn:aws:logs:*:*:*'
+        - Effect: Allow
+          Action:
+            - sns:Publish
+          Resource:
+            - Ref: StateMachineErrorTopic
+
+functions:
+  getState:
+    handler: handler.getState
+    timeout: 30
+    memorySize: 256
+    events:
+      - httpApi:
+          path: /state
+          method: GET
+    onError:
+      Ref: StateMachineErrorTopic
+
+  updateState:
+    handler: handler.updateState
+    timeout: 30
+    memorySize: 256
+    events:
+      - httpApi:
+          path: /state
+          method: POST
+    onError:
+      Ref: StateMachineErrorTopic
+
+resources:
+  Resources:
+    StateMachineErrorTopic:
+      Type: AWS::SNS::Topic
+      Properties:
+        TopicName: pilot-state-machine-${self:provider.stage}-errors
+
+    StateMachineErrorTopicSubscription:
+      Type: AWS::SNS::Subscription
+      Properties:
+        TopicArn:
+          Ref: StateMachineErrorTopic
+        Protocol: email
+        Endpoint: william@decodelove.com
+
+  Outputs:
+    StateMachineErrorTopicArn:
+      Description: SNS Topic ARN for Lambda errors
+      Value:
+        Ref: StateMachineErrorTopic
+      Export:
+        Name: ${self:service}-${self:provider.stage}-error-topic-arn
+    ApiEndpoint:
+      Description: State machine API endpoint URL
+      Value:
+        Fn::Join:
+          - ''
+          - - 'https://'
+            - Ref: HttpApi
+            - '.execute-api.'
+            - ${self:provider.region}
+            - '.amazonaws.com'
