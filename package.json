@@ -2,6 +2,7 @@
   "name": "pilot-state-machine",
   "description": "State machine API: GET to check state, POST to update state in the database",
   "dependencies": {
+    "@aws-sdk/client-sns": "^3.982.0",
     "pg": "^8.11.3"
   },
   "devDependencies": {

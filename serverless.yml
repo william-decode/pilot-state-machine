@@ -15,6 +15,7 @@ provider:
     DB_NAME: ${file(config/config.js):DB_NAME}
     DB_USER: ${file(config/config.js):DB_USER}
     DB_PASSWORD: ${file(config/config.js):DB_PASSWORD}
+    ROUTER_TOPIC_ARN: arn:aws:sns:us-east-1:598386793277:s3-event-router-${self:provider.stage}-general
   vpc:
     securityGroupIds:
       - ${file(config/config.js):VPC_SECURITY_GROUP_ID}
@@ -35,6 +36,11 @@ provider:
             - sns:Publish
           Resource:
             - Ref: StateMachineErrorTopic
+        - Effect: Allow
+          Action:
+            - sns:Publish
+          Resource:
+            - arn:aws:sns:us-east-1:598386793277:s3-event-router-${self:provider.stage}-general
 
 functions:
   getState:
@@ -59,6 +65,127 @@ functions:
     onError:
       Ref: StateMachineErrorTopic
 
+  getActionsByKitId:
+    handler: handler.getActionsByKitId
+    timeout: 30
+    memorySize: 256
+    events:
+      - httpApi:
+          path: /actions
+          method: POST
+    onError:
+      Ref: StateMachineErrorTopic
+
+  getUsersByKitId:
+    handler: handler.getUsersByKitId
+    timeout: 30
+    memorySize: 256
+    events:
+      - httpApi:
+          path: /users
+          method: POST
+    onError:
+      Ref: StateMachineErrorTopic
+
+  getReportsByKitId:
+    handler: handler.getReportsByKitId
+    timeout: 30
+    memorySize: 256
+    events:
+      - httpApi:
+          path: /reports
+          method: POST
+    onError:
+      Ref: StateMachineErrorTopic
+
+  getKitsByKitId:
+    handler: handler.getKitsByKitId
+    timeout: 30
+    memorySize: 256
+    events:
+      - httpApi:
+          path: /kits
+          method: POST
+    onError:
+      Ref: StateMachineErrorTopic
+
+  getConsentsByKitId:
+    handler: handler.getConsentsByKitId
+    timeout: 30
+    memorySize: 256
+    events:
+      - httpApi:
+          path: /consents
+          method: POST
+    onError:
+      Ref: StateMachineErrorTopic
+
+  updateActions:
+    handler: handler.updateActions
+    timeout: 30
+    memorySize: 256
+    events:
+      - httpApi:
+          path: /actions/update
+          method: POST
+    onError:
+      Ref: StateMachineErrorTopic
+
+  updateUsers:
+    handler: handler.updateUsers
+    timeout: 30
+    memorySize: 256
+    events:
+      - httpApi:
+          path: /users/update
+          method: POST
+    onError:
+      Ref: StateMachineErrorTopic
+
+  updateReports:
+    handler: handler.updateReports
+    timeout: 30
+    memorySize: 256
+    events:
+      - httpApi:
+          path: /reports/update
+          method: POST
+    onError:
+      Ref: StateMachineErrorTopic
+
+  updateKits:
+    handler: handler.updateKits
+    timeout: 30
+    memorySize: 256
+    events:
+      - httpApi:
+          path: /kits/update
+          method: POST
+    onError:
+      Ref: StateMachineErrorTopic
+
+  updateConsents:
+    handler: handler.updateConsents
+    timeout: 30
+    memorySize: 256
+    events:
+      - httpApi:
+          path: /consents/update
+          method: POST
+    onError:
+      Ref: StateMachineErrorTopic
+
+  webhookActions:
+    handler: handler.webhookActions
+    timeout: 30
+    memorySize: 256
+    events:
+      - httpApi:
+          path: /webhooks/actions
+          method: POST
+    onError:
+      Ref: StateMachineErrorTopic
+
 resources:
   Resources:
     StateMachineErrorTopic:
@@ -72,7 +199,15 @@ resources:
         TopicArn:
           Ref: StateMachineErrorTopic
         Protocol: email
-        Endpoint: william@decodelove.com
+        Endpoint: ${file(config/config.js):ERROR_SUBSCRIBER_EMAIL}
+
+    StateMachineErrorTopicSubscription2:
+      Type: AWS::SNS::Subscription
+      Properties:
+        TopicArn:
+          Ref: StateMachineErrorTopic
+        Protocol: email
+        Endpoint: ${file(config/config.js):ERROR_SUBSCRIBER_EMAIL_2}
 
   Outputs:
     StateMachineErrorTopicArn:

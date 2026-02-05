@@ -14,5 +14,11 @@ module.exports = {
   // For production, consider creating a dedicated security group for Lambda
   VPC_SECURITY_GROUP_ID: "sg-0b5ea54bb25bdda06", // Default security group (same as RDS)
   VPC_SUBNET_ID_1: "subnet-0ab80941e931d06cf", // First subnet ID from default VPC
-  VPC_SUBNET_ID_2: "subnet-055244d84ed6500d2" // Second subnet ID (pick different AZ for HA if possible)
+  VPC_SUBNET_ID_2: "subnet-055244d84ed6500d2", // Second subnet ID (pick different AZ for HA if possible)
+
+  // Lambda error notifications (SNS email subscriptions)
+  ERROR_SUBSCRIBER_EMAIL: "william@decodelove.com",
+  ERROR_SUBSCRIBER_EMAIL_2: "william@decodelove.com" // Add your email here to receive error alerts
+
+  // Router topic ARN is built in serverless.yml as s3-event-router-<stage>-general
 };

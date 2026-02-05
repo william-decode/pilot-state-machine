@@ -1,0 +1,112 @@
+Pilot State Machine — Email Service Integration
+
+How your email service (e.g. another Lambda) can connect to check users, actions, and update them.
+
+
+1. HTTP API (recommended)
+
+Call the deployed API over HTTPS. No Lambda invocation, no IAM required.
+
+Base URL (after deploy):
+  https://<api-id>.execute-api.us-east-1.amazonaws.com
+
+Get from stack output:
+  aws cloudformation describe-stacks --stack-name pilot-state-machine-dev \
+    --query "Stacks[0].Outputs[?OutputKey=='ApiEndpoint'].OutputValue" --output text
+
+
+Endpoints (all POST, Content-Type: application/json)
+
+Read users by kit_id:
+  POST /users
+  Body: {"kit_id": "KIT-12345"}
+  Response: {"kit_id": "KIT-12345", "users": [{ ...all columns }]}
+
+Read actions by kit_id:
+  POST /actions
+  Body: {"kit_id": "KIT-12345"}
+  Response: {"kit_id": "KIT-12345", "actions": [{ ...all columns }]}
+
+Update users by kit_id:
+  POST /users/update
+  Body: {"kit_id": "KIT-12345", "email_sent": true, "last_email_at": "2026-02-03T12:00:00Z"}
+  Response: {"ok": true, "kit_id": "KIT-12345", "updated": N}
+
+Update actions by kit_id:
+  POST /actions/update
+  Body: {"kit_id": "KIT-12345", "appointment_made": true}
+  Response: {"ok": true, "kit_id": "KIT-12345", "updated": N}
+
+
+Node.js example:
+
+  const baseUrl = process.env.STATE_MACHINE_API_URL;
+
+  async function getActions(kitId) {
+    const res = await fetch(`${baseUrl}/actions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kit_id: kitId }),
+    });
+    const data = await res.json();
+    if (res.status !== 200) throw new Error(data.error || res.statusText);
+    return data.actions;
+  }
+
+  async function updateActions(kitId, fields) {
+    const res = await fetch(`${baseUrl}/actions/update`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kit_id: kitId, ...fields }),
+    });
+    const data = await res.json();
+    if (res.status !== 200) throw new Error(data.error || res.statusText);
+    return data;
+  }
+
+
+2. Direct Lambda invocation (alternative)
+
+Lower latency, no API Gateway cost, but requires IAM permission (lambda:InvokeFunction)
+and constructing the event in HTTP API shape.
+
+  const { LambdaClient, InvokeCommand } = require('@aws-sdk/client-lambda');
+
+  const lambda = new LambdaClient({ region: 'us-east-1' });
+  const functionName = 'pilot-state-machine-dev-updateActions';
+
+  const payload = {
+    rawPath: '/actions/update',
+    requestContext: { http: { method: 'POST' } },
+    body: JSON.stringify({ kit_id: 'KIT-12345', email_sent: true }),
+  };
+
+  const result = await lambda.send(new InvokeCommand({
+    FunctionName: functionName,
+    Payload: JSON.stringify(payload),
+    InvocationType: 'RequestResponse',
+  }));
+
+  const response = JSON.parse(Buffer.from(result.Payload).toString());
+
+
+Function names (stage = dev):
+  pilot-state-machine-dev-getActionsByKitId
+  pilot-state-machine-dev-getUsersByKitId
+  pilot-state-machine-dev-updateActions
+  pilot-state-machine-dev-updateUsers
+  ... etc (check serverless.yml)
+
+
+3. Lookup by email
+
+Current endpoints all require kit_id. The Calendly webhook does internal lookup by email
+to get kit_id, but that's not exposed. If your email service only has email:
+  - Either add a POST /users/by-email endpoint to this API, or
+  - Have the email service resolve kit_id from its own store first.
+
+
+4. Auth
+
+The API has no auth (API key, IAM) yet. Anyone with the base URL can call it.
+For production, consider adding IAM auth or API key if the email service is in AWS.
