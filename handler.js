@@ -196,16 +196,23 @@ function updateByKitId(tableName) {
       const setClause = columns.map((c, i) => `${c} = $${i + 2}`).join(', ');
       const params = [kitId, ...columns.map((c) => updates[c])];
       const db = getPool();
-      const result = await db.query(
+      let result = await db.query(
         `UPDATE ${tableName} SET ${setClause} WHERE kit_id = $1`,
         params
       );
 
+      let created = false;
       if (result.rowCount === 0) {
-        return jsonResponse(404, { error: 'No rows updated for kit_id', kit_id: kitId });
+        const insertCols = ['kit_id', ...columns].join(', ');
+        const insertPlaces = columns.map((_, i) => `$${i + 2}`).join(', ');
+        result = await db.query(
+          `INSERT INTO ${tableName} (${insertCols}) VALUES ($1, ${insertPlaces})`,
+          params
+        );
+        created = true;
       }
 
-      return jsonResponse(200, { ok: true, kit_id: kitId, updated: result.rowCount });
+      return jsonResponse(200, { ok: true, kit_id: kitId, updated: result.rowCount, created });
     } catch (error) {
       console.error(`update${tableName} error:`, error);
       if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND') {
@@ -249,6 +256,8 @@ exports.webhookActions = async (event) => {
     const isInviteeCreated = String(body.event || '').toLowerCase() === 'invitee.created';
     if (isInviteeCreated) {
     try {
+      console.log('Calendly invitee.created payload', JSON.stringify(body.payload, null, 2));
+
       const email = body.payload?.email;
       if (!email || typeof email !== 'string') {
         return always200({ ok: false, error: 'invitee.created payload missing email' });
@@ -288,6 +297,30 @@ exports.webhookActions = async (event) => {
       }
 
       console.log('📅 Calendly invitee.created processed', { email, kitId });
+
+      const guests = Array.isArray(body.payload?.scheduled_event?.event_guests)
+        ? body.payload.scheduled_event.event_guests
+        : [];
+      for (const guest of guests) {
+        const guestEmail = guest?.email;
+        if (!guestEmail || typeof guestEmail !== 'string') continue;
+        const guestUserResult = await db.query(
+          'SELECT kit_id FROM users WHERE lower(email) = lower($1) LIMIT 1',
+          [guestEmail.trim().toLowerCase()]
+        );
+        if (guestUserResult.rows.length === 0 || !guestUserResult.rows[0].kit_id) continue;
+        const guestKitId = guestUserResult.rows[0].kit_id;
+        let guestActionResult = await db.query(
+          'UPDATE actions SET appointment_made = true WHERE kit_id = $1',
+          [guestKitId]
+        );
+        if (guestActionResult.rowCount === 0) {
+          await db.query(
+            'INSERT INTO actions (kit_id, appointment_made) VALUES ($1, true)',
+            [guestKitId]
+          );
+        }
+      }
 
       const topicArn = process.env.ROUTER_TOPIC_ARN;
       console.log('SNS publish attempt', { topicArn: topicArn || '(not set)', kitId });
