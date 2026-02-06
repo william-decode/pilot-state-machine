@@ -229,11 +229,95 @@ function updateByKitId(tableName) {
   };
 }
 
-exports.updateActions = updateByKitId(TABLES.actions);
+const topicArn = () => process.env.ROUTER_TOPIC_ARN;
+
+async function maybeSendPdfEmail(db, kitId, link) {
+  const topic = topicArn();
+  if (!topic) {
+    console.log('maybeSendPdfEmail skipped', { kitId, reason: 'ROUTER_TOPIC_ARN not set' });
+    return;
+  }
+  const userResult = await db.query(
+    'SELECT kit_id, email, first_name FROM users WHERE kit_id = $1 LIMIT 1',
+    [kitId]
+  );
+  if (userResult.rows.length === 0) {
+    console.log('maybeSendPdfEmail skipped', { kitId, reason: 'no user' });
+    return;
+  }
+  const user = userResult.rows[0];
+  const consentResult = await db.query(
+    'SELECT toc_agreed FROM consents WHERE kit_id = $1 LIMIT 1',
+    [kitId]
+  );
+  if (consentResult.rows.length === 0) {
+    console.log('maybeSendPdfEmail skipped', { kitId, reason: 'no consent' });
+    return;
+  }
+  if (!consentResult.rows[0].toc_agreed) {
+    console.log('maybeSendPdfEmail skipped', { kitId, reason: 'toc_agreed false' });
+    return;
+  }
+  const actionResult = await db.query(
+    'SELECT appointment_made, pdf_email_sent FROM actions WHERE kit_id = $1 LIMIT 1',
+    [kitId]
+  );
+  if (actionResult.rows.length === 0) {
+    console.log('maybeSendPdfEmail skipped', { kitId, reason: 'no action row' });
+    return;
+  }
+  const action = actionResult.rows[0];
+  if (!action.appointment_made) {
+    console.log('maybeSendPdfEmail skipped', { kitId, reason: 'appointment_made false' });
+    return;
+  }
+  if (action.pdf_email_sent) {
+    console.log('maybeSendPdfEmail skipped', { kitId, reason: 'pdf_email_sent already true' });
+    return;
+  }
+  const firstName = user.first_name || '';
+  const email = user.email || '';
+  console.log('maybeSendPdfEmail running', { kitId, email });
+  try {
+    await snsClient.send(new PublishCommand({
+      TopicArn: topic,
+      Message: JSON.stringify({
+        message_type: 'send_pdf_email',
+        kit_id: kitId,
+        firstName,
+        email,
+        link: link || undefined,
+      }),
+    }));
+    console.log('maybeSendPdfEmail sent', { kitId });
+  } catch (err) {
+    console.error('maybeSendPdfEmail failed', { kitId, error: err.message });
+  }
+}
+
+exports.updateActions = async (event) => {
+  const result = await updateByKitId(TABLES.actions)(event);
+  if (result.statusCode !== 200) return result;
+  const body = parseJsonBody(event);
+  if (body?.appointment_made && body?.kit_id) {
+    const db = getPool();
+    await maybeSendPdfEmail(db, body.kit_id);
+  }
+  return result;
+};
 exports.updateUsers = updateByKitId(TABLES.users);
+exports.updateConsents = async (event) => {
+  const result = await updateByKitId(TABLES.consents)(event);
+  if (result.statusCode !== 200) return result;
+  const body = parseJsonBody(event);
+  if (body?.toc_agreed && body?.kit_id) {
+    const db = getPool();
+    await maybeSendPdfEmail(db, body.kit_id);
+  }
+  return result;
+};
 exports.updateReports = updateByKitId(TABLES.reports);
 exports.updateKits = updateByKitId(TABLES.kits);
-exports.updateConsents = updateByKitId(TABLES.consents);
 
 /**
  * POST /webhooks/actions — Incoming webhook: update actions table by kit_id.
@@ -301,6 +385,7 @@ exports.webhookActions = async (event) => {
       const guests = Array.isArray(body.payload?.scheduled_event?.event_guests)
         ? body.payload.scheduled_event.event_guests
         : [];
+      const touchedKitIds = [kitId];
       for (const guest of guests) {
         const guestEmail = guest?.email;
         if (!guestEmail || typeof guestEmail !== 'string') continue;
@@ -310,6 +395,7 @@ exports.webhookActions = async (event) => {
         );
         if (guestUserResult.rows.length === 0 || !guestUserResult.rows[0].kit_id) continue;
         const guestKitId = guestUserResult.rows[0].kit_id;
+        touchedKitIds.push(guestKitId);
         let guestActionResult = await db.query(
           'UPDATE actions SET appointment_made = true WHERE kit_id = $1',
           [guestKitId]
@@ -320,6 +406,10 @@ exports.webhookActions = async (event) => {
             [guestKitId]
           );
         }
+      }
+
+      for (const kid of touchedKitIds) {
+        await maybeSendPdfEmail(db, kid, kid === kitId ? link : undefined);
       }
 
       const topicArn = process.env.ROUTER_TOPIC_ARN;
