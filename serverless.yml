@@ -120,6 +120,28 @@ functions:
     onError:
       Ref: StateMachineErrorTopic
 
+  getUsersByEmail:
+    handler: handler.getUsersByEmail
+    timeout: 30
+    memorySize: 256
+    events:
+      - httpApi:
+          path: /users/by-email
+          method: POST
+    onError:
+      Ref: StateMachineErrorTopic
+
+  createUser:
+    handler: handler.createUser
+    timeout: 30
+    memorySize: 256
+    events:
+      - httpApi:
+          path: /users/create
+          method: POST
+    onError:
+      Ref: StateMachineErrorTopic
+
   updateActions:
     handler: handler.updateActions
     timeout: 30

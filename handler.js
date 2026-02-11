@@ -167,6 +167,77 @@ exports.getKitsByKitId = getByKitId(TABLES.kits, 'kits');
 exports.getConsentsByKitId = getByKitId(TABLES.consents, 'consents');
 
 /**
+ * POST /users/by-email — Look up users by email (case-insensitive).
+ * Body: { email: string }
+ */
+exports.getUsersByEmail = async (event) => {
+  try {
+    const body = parseJsonBody(event);
+    if (body === null) return jsonResponse(400, { error: 'Request body must be valid JSON' });
+    const email = body.email;
+    if (!email || typeof email !== 'string') {
+      return jsonResponse(400, { error: '"email" is required and must be a string' });
+    }
+    const db = getPool();
+    const result = await db.query(
+      `SELECT * FROM ${TABLES.users} WHERE LOWER(email) = LOWER($1)`,
+      [email.trim()]
+    );
+    return jsonResponse(200, { email: email.trim(), users: result.rows });
+  } catch (error) {
+    console.error('getUsersByEmail error:', error);
+    if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND') {
+      return jsonResponse(500, { error: 'Database connection failed' });
+    }
+    if (error.code === '42P01') {
+      return jsonResponse(500, { error: 'Table "users" not found.' });
+    }
+    throw error;
+  }
+};
+
+/**
+ * POST /users/create — Create a user with kit_id, email, is_test, first_name.
+ * Body: { kit_id: string, email: string, is_test: boolean }
+ * first_name is set to 'test_user' for test users.
+ * Returns 201 with user row, or 409 if kit_id already exists (caller should retry with new kit_id).
+ */
+exports.createUser = async (event) => {
+  try {
+    const body = parseJsonBody(event);
+    if (body === null) return jsonResponse(400, { error: 'Request body must be valid JSON' });
+    const kitId = body.kit_id;
+    const email = body.email;
+    const isTest = body.is_test === true;
+    if (!kitId || typeof kitId !== 'string') {
+      return jsonResponse(400, { error: '"kit_id" is required and must be a string' });
+    }
+    if (!email || typeof email !== 'string') {
+      return jsonResponse(400, { error: '"email" is required and must be a string' });
+    }
+    const db = getPool();
+    const result = await db.query(
+      `INSERT INTO ${TABLES.users} (kit_id, email, is_test, first_name) VALUES ($1, $2, $3, 'test_user') RETURNING *`,
+      [kitId, email.trim(), isTest]
+    );
+    if (result.rows.length === 0) return jsonResponse(500, { error: 'Insert failed' });
+    return jsonResponse(201, { ok: true, user: result.rows[0] });
+  } catch (error) {
+    console.error('createUser error:', error);
+    if (error.code === '23505') {
+      return jsonResponse(409, { error: 'kit_id already exists', conflict: 'kit_id' });
+    }
+    if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND') {
+      return jsonResponse(500, { error: 'Database connection failed' });
+    }
+    if (error.code === '42P01') {
+      return jsonResponse(500, { error: 'Table "users" not found.' });
+    }
+    throw error;
+  }
+};
+
+/**
  * Build UPDATE table SET col1=$2, col2=$3 ... WHERE kit_id=$1 from body.
  * Only keys matching SAFE_COLUMN are used; kit_id is required and used in WHERE.
  */
