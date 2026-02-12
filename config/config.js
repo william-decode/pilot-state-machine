@@ -18,7 +18,7 @@ module.exports = {
 
   // Lambda error notifications (SNS email subscriptions)
   ERROR_SUBSCRIBER_EMAIL: "william@decodelove.com",
-  ERROR_SUBSCRIBER_EMAIL_2: "william@decodelove.com" // Add your email here to receive error alerts
+  ERROR_SUBSCRIBER_EMAIL_2: "william@decodelove.com", // Add your email here to receive error alerts
 
   // Router topic ARN is built in serverless.yml as s3-event-router-<stage>-general
 };

@@ -7,6 +7,7 @@
  */
 
 const { Pool } = require('pg');
+const { LambdaClient, InvokeCommand } = require('@aws-sdk/client-lambda');
 const { SNSClient, PublishCommand } = require('@aws-sdk/client-sns');
 
 const STATE_TABLE = 'state_machine_state';
@@ -120,6 +121,67 @@ exports.updateState = async (event) => {
 
 const TABLES = { actions: 'actions', users: 'users', reports: 'reports', kits: 'kits', consents: 'consents' };
 const SAFE_COLUMN = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
+const AIRTABLE_UPDATE_URL = 'https://k9p740qez4.execute-api.us-east-1.amazonaws.com/update';
+const lambdaClient = new LambdaClient({ region: 'us-east-1' });
+
+/** Convert snake_case to "Title Case" (e.g. appointment_made → "Appointment Made"). */
+function toTitleCase(snakeStr) {
+  return snakeStr.split('_').map((s) => s.charAt(0).toUpperCase() + s.slice(1).toLowerCase()).join(' ');
+}
+
+/** POST updates to Airtable API. Fields use Title Case keys (e.g. toc_agreed → "Toc Agreed"). Logs if user/kit not found. */
+async function syncToAirtable(kitId, updates) {
+  const columns = Object.keys(updates).filter((k) => SAFE_COLUMN.test(k));
+  if (columns.length === 0) return;
+  const fields = columns.map((col) => {
+    const titleKey = toTitleCase(col);
+    return { [titleKey]: updates[col] };
+  });
+  const payload = { kit_id: kitId, fields };
+
+  const lambdaArn = process.env.AIRTABLE_LAMBDA_ARN;
+  if (lambdaArn) {
+    try {
+      const { Payload, FunctionError } = await lambdaClient.send(new InvokeCommand({
+        FunctionName: lambdaArn,
+        InvocationType: 'RequestResponse',
+        Payload: JSON.stringify(payload),
+      }));
+      if (FunctionError) {
+        console.error('syncToAirtable Lambda error', { kit_id: kitId, FunctionError });
+        return;
+      }
+      const result = Payload ? JSON.parse(new TextDecoder().decode(Payload)) : {};
+      const statusCode = result.statusCode ?? 200;
+      if (statusCode === 404 || (result.body && /not found|user not found/i.test(String(result.body)))) {
+        console.log('syncToAirtable: user/kit not found', { kit_id: kitId, statusCode });
+      } else if (statusCode >= 400) {
+        console.error('syncToAirtable failed', { kit_id: kitId, statusCode, body: result.body });
+      }
+    } catch (err) {
+      console.error('syncToAirtable error', { kit_id: kitId, error: err.message });
+    }
+    return;
+  }
+
+  try {
+    const res = await fetch(AIRTABLE_UPDATE_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      if (res.status === 404 || (text && /not found|user not found/i.test(text))) {
+        console.log('syncToAirtable: user/kit not found', { kit_id: kitId, status: res.status });
+      } else {
+        console.error('syncToAirtable failed', { kit_id: kitId, status: res.status, body: text });
+      }
+    }
+  } catch (err) {
+    console.error('syncToAirtable error', { kit_id: kitId, error: err.message });
+  }
+}
 
 function parseJsonBody(event) {
   try {
@@ -374,6 +436,14 @@ exports.updateActions = async (event) => {
     const db = getPool();
     await maybeSendPdfEmail(db, body.kit_id);
   }
+  if (body?.kit_id) {
+    const updates = { ...body };
+    delete updates.kit_id;
+    const columns = Object.keys(updates).filter((k) => SAFE_COLUMN.test(k));
+    if (columns.length > 0) {
+      await syncToAirtable(body.kit_id, updates);
+    }
+  }
   return result;
 };
 exports.updateUsers = updateByKitId(TABLES.users);
@@ -384,6 +454,14 @@ exports.updateConsents = async (event) => {
   if (body?.toc_agreed && body?.kit_id) {
     const db = getPool();
     await maybeSendPdfEmail(db, body.kit_id);
+  }
+  if (body?.kit_id) {
+    const updates = { ...body };
+    delete updates.kit_id;
+    const columns = Object.keys(updates).filter((k) => SAFE_COLUMN.test(k));
+    if (columns.length > 0) {
+      await syncToAirtable(body.kit_id, updates);
+    }
   }
   return result;
 };
@@ -481,6 +559,10 @@ exports.webhookActions = async (event) => {
 
       for (const kid of touchedKitIds) {
         await maybeSendPdfEmail(db, kid, kid === kitId ? link : undefined);
+      }
+
+      for (const kid of touchedKitIds) {
+        await syncToAirtable(kid, { appointment_made: true });
       }
 
       const topicArn = process.env.ROUTER_TOPIC_ARN;
